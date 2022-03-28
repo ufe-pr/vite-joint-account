@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: MIT
+pragma soliditypp ^0.8.0;
+
+import "./JointAccountManager.solpp";
+
+contract JointAccount {
+    event MotionProposed(
+        address indexed proposer,
+        address indexed destination,
+        uint256 amount,
+        vitetoken indexed tokenType
+    );
+    event MotionApproved(
+        address indexed _member,
+        address indexed destination,
+        uint256 amount,
+        vitetoken indexed tokenType
+    );
+    event MotionExecuted(
+        address indexed destination,
+        uint256 amount,
+        vitetoken indexed tokenType
+    );
+    event MotionRejected(
+        address indexed destination,
+        uint256 amount,
+        vitetoken indexed tokenType
+    );
+    event ReceivedFunds(
+        address indexed _from,
+        uint256 amount,
+        vitetoken indexed tokenType
+    );
+
+    struct Proposal {
+        vitetoken tokenType;
+        uint256 amount;
+        address destination;
+    }
+
+    vitetoken private constant defaultTokenType =
+        "tti_5649544520544f4b454e6e40";
+
+    address maker;
+    uint256 treshold;
+    uint256 positiveVoteCount;
+    Proposal proposal;
+    address[] voters;
+    mapping(address => bool) canVote;
+    mapping(address => bool) voted;
+
+    constructor(
+        address _manager,
+        uint256 _treshold,
+        address[] memory _voters
+    ) {
+        _initVoters(_voters, _treshold);
+
+        JointAccountManager manager = JointAccountManager(_manager);
+        manager.registerJointAccount(address(this));
+    }
+
+    receive() external payable {
+        emit ReceivedFunds(msg.sender, msg.value, defaultTokenType);
+    }
+
+    modifier onlyMaker() {
+        require(msg.sender == maker);
+        _;
+    }
+
+    modifier onlyVoter() {
+        require(canVote[msg.sender] || msg.sender == maker);
+        _;
+    }
+
+    function _setProposal(Proposal memory _proposal) internal {
+        require(_proposal.amount <= balance(_proposal.tokenType));
+        require(_proposal.destination != address(0));
+
+        proposal = _proposal;
+        positiveVoteCount = 0;
+        for (uint256 i = 0; i < voters.length; i++) {
+            voted[voters[i]] = false;
+        }
+        emit MotionProposed(
+            msg.sender,
+            proposal.destination,
+            proposal.amount,
+            proposal.tokenType
+        );
+    }
+
+    function createProposal(
+        uint256 _amount,
+        address _destination,
+        vitetoken _tokenType
+    ) external onlyVoter {
+        Proposal memory _proposal = Proposal(_tokenType, _amount, _destination);
+        _setProposal(_proposal);
+    }
+
+    function _approve(address voter) internal {
+        require(!voted[voter]);
+        require(proposal.destination != address(0));
+
+        voted[voter] = true;
+
+        positiveVoteCount++;
+
+        emit MotionApproved(
+            voter,
+            proposal.destination,
+            proposal.amount,
+            proposal.tokenType
+        );
+        if (positiveVoteCount >= treshold) {
+            executeMotion();
+        }
+    }
+
+    function approve() external onlyVoter {
+        _approve(msg.sender);
+    }
+
+    function getProposal()
+        external
+        view
+        returns (
+            vitetoken tokenType,
+            uint256 amount,
+            address destination
+        )
+    {
+        return (proposal.tokenType, proposal.amount, proposal.destination);
+    }
+
+    function _initVoters(address[] memory newVoters, uint256 newTreshold)
+        private
+    {
+        require(newVoters.length > 0);
+        require(newTreshold > 0);
+        require(newTreshold <= newVoters.length);
+
+        voters = newVoters;
+        treshold = newTreshold;
+
+        for (uint256 i = 0; i < newVoters.length; i++) {
+            require(newVoters[i] != address(0));
+            canVote[newVoters[i]] = true;
+        }
+    }
+
+    function updateTreshold(uint256 newTreshold) public onlyMaker {
+        require(newTreshold > 0);
+        require(newTreshold <= voters.length);
+
+        treshold = newTreshold;
+    }
+
+    function resetMotion() public onlyVoter {
+        if (positiveVoteCount < treshold) {
+            emit MotionRejected(
+                proposal.destination,
+                proposal.amount,
+                proposal.tokenType
+            );
+        }
+        proposal = Proposal(defaultTokenType, 0, address(0));
+        positiveVoteCount = 0;
+        for (uint256 i = 0; i < voters.length; i++) {
+            voted[voters[i]] = false;
+        }
+    }
+
+    function executeMotion() internal {
+        require(positiveVoteCount >= treshold);
+        require(proposal.amount > 0);
+        require(proposal.destination != address(0));
+
+        Proposal memory _proposal = proposal;
+        emit MotionExecuted(
+            _proposal.destination,
+            _proposal.amount,
+            _proposal.tokenType
+        );
+        resetMotion();
+        payable(_proposal.destination).transfer(
+            _proposal.tokenType,
+            _proposal.amount
+        );
+    }
+}
