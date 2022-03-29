@@ -39,21 +39,22 @@ contract JointAccount {
     }
 
     vitetoken private constant defaultTokenType =
-        "tti_5649544520544f4b454e6e40";
+        "tti_000000000000000000004cfd";
 
-    address maker;
-    uint256 treshold;
-    uint256 positiveVoteCount;
+    address public maker;
+    uint256 public treshold;
+    uint256 public positiveVoteCount;
     Proposal proposal;
-    address[] voters;
+    address[] public voters;
     mapping(address => bool) canVote;
-    mapping(address => bool) voted;
+    mapping(address => bool) public voted;
 
     constructor(
         address _manager,
         uint256 _treshold,
         address[] memory _voters
     ) {
+        maker = msg.sender;
         _initVoters(_voters, _treshold);
 
         JointAccountManager manager = JointAccountManager(_manager);
@@ -76,19 +77,12 @@ contract JointAccount {
 
     function _setProposal(Proposal memory _proposal) internal {
         require(_proposal.amount <= balance(_proposal.tokenType));
-        require(_proposal.destination != address(0));
 
         proposal = _proposal;
         positiveVoteCount = 0;
         for (uint256 i = 0; i < voters.length; i++) {
             voted[voters[i]] = false;
         }
-        emit MotionProposed(
-            msg.sender,
-            proposal.destination,
-            proposal.amount,
-            proposal.tokenType
-        );
     }
 
     function createProposal(
@@ -96,8 +90,20 @@ contract JointAccount {
         address _destination,
         vitetoken _tokenType
     ) external onlyVoter {
+        require(_destination != address(0));
+        require(_tokenType != defaultTokenType);
+        require(_amount > 0);
+
         Proposal memory _proposal = Proposal(_tokenType, _amount, _destination);
-        _setProposal(_proposal);
+        resetMotion();
+        proposal = _proposal;
+
+        emit MotionProposed(
+            msg.sender,
+            proposal.destination,
+            proposal.amount,
+            proposal.tokenType
+        );
     }
 
     function _approve(address voter) internal {
@@ -114,9 +120,6 @@ contract JointAccount {
             proposal.amount,
             proposal.tokenType
         );
-        if (positiveVoteCount >= treshold) {
-            executeMotion();
-        }
     }
 
     function approve() external onlyVoter {
@@ -127,12 +130,12 @@ contract JointAccount {
         external
         view
         returns (
-            vitetoken tokenType,
             uint256 amount,
-            address destination
+            address destination,
+            vitetoken tokenType
         )
     {
-        return (proposal.tokenType, proposal.amount, proposal.destination);
+        return (proposal.amount, proposal.destination, proposal.tokenType);
     }
 
     function _initVoters(address[] memory newVoters, uint256 newTreshold)
@@ -158,6 +161,10 @@ contract JointAccount {
         treshold = newTreshold;
     }
 
+    function _resetMotion() public onlyVoter {
+        _setProposal(Proposal(defaultTokenType, 0, address(0)));
+    }
+
     function resetMotion() public onlyVoter {
         if (positiveVoteCount < treshold) {
             emit MotionRejected(
@@ -165,15 +172,13 @@ contract JointAccount {
                 proposal.amount,
                 proposal.tokenType
             );
-        }
-        proposal = Proposal(defaultTokenType, 0, address(0));
-        positiveVoteCount = 0;
-        for (uint256 i = 0; i < voters.length; i++) {
-            voted[voters[i]] = false;
+            _resetMotion();
+        } else {
+            executeMotion();
         }
     }
 
-    function executeMotion() internal {
+    function executeMotion() public {
         require(positiveVoteCount >= treshold);
         require(proposal.amount > 0);
         require(proposal.destination != address(0));
@@ -184,7 +189,7 @@ contract JointAccount {
             _proposal.amount,
             _proposal.tokenType
         );
-        resetMotion();
+        _resetMotion();
         payable(_proposal.destination).transfer(
             _proposal.tokenType,
             _proposal.amount
